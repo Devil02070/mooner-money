@@ -1,0 +1,18 @@
+'use client'
+import { Button } from "@/components/ui/button";
+import { H1 } from "@/components/ui/typography";
+import Link from "next/link";
+
+export default function ErrorPage() {
+    return (
+        <div className="outer-layer min-h-[calc(100vh-108px)] flex items-center justify-center">
+            <div className="not-found text-center">
+                <H1>Error server not working</H1>
+                {/* <Image src='/error.png' alt="404" height={225} width={269} className='mt-20' /> */}
+                <Button asChild className="btn-yellow rounded-pill mt-8">
+                    <Link href="/">Reload</Link>
+                </Button>
+            </div>
+        </div>
+    )
+}

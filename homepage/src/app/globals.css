@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-body: var(--font-hanken-grotesk);
+  --font-heading: var(--font-luckiest-guy);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-hanken-grotesk), Arial, Helvetica, sans-serif;
+  overflow-x: hidden;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-luckiest-guy), cursive;
+}
+
+
+.bg-hero {
+  background-image: url('/public/meow-hero.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+
+.text-outline {
+  -webkit-text-stroke: 0.1px black; 
+  /* text-stroke: 1px black;   */
+}

@@ -1,0 +1,227 @@
+module mooner_money::mooner_spin {
+    use std::signer;
+    use std::vector;
+    use std::option::Option;
+    use aptos_std::math64;
+    use aptos_framework::randomness;
+    use aptos_framework::object::{Self, Object};
+    use aptos_framework::fungible_asset::{Self, FungibleStore, Metadata};
+    use aptos_framework::primary_fungible_store;
+    use aptos_framework::event;
+    use mooner_money::helper;
+
+    struct GameStatus has key {
+        current_game: Object<Game>,
+        previous_games: vector<Object<Game>>,
+        game_owner: address,
+        pending_game_owner: address,
+    }
+
+    #[resource_group_member(group=aptos_framework::object::ObjectGroup)]
+    struct Game has key {
+        token_store: Object<FungibleStore>,
+        max_token_amount: u64,
+        max_xp: u64,
+        extend_ref: object::ExtendRef
+    }
+
+    #[event]
+    struct GameInitEvent has drop, store {
+        game: address,
+    }
+
+    #[event]
+    struct SpinEvent has drop, store {
+        claimer: address,
+        win_type: u8,
+        amount: u64
+    }
+
+    /// Not the owner of the game module
+    const ERR_NOT_GAME_OWNER: u64 = 0;
+    /// Game status not initialized
+    const ERR_GAME_STATUS_NOT_INITITALIZED: u64 = 1;
+    /// Not the pending owner of game module
+    const ERR_NOT_PENDING_GAME_OWNER: u64 = 2;
+    /// Game status already initialized
+    const ERR_GAME_STATUS_ALREADY_INITIALIZED: u64 = 3;
+
+    public entry fun initialize(admin: &signer, token: Object<Metadata>, max_token_amount: u64, max_xp: u64) acquires GameStatus {
+        assert!(!exists<GameStatus>(@admin), ERR_GAME_STATUS_ALREADY_INITIALIZED);
+        let admin_addr = signer::address_of(admin);
+        helper::assert_is_admin(
+            signer::address_of(admin)
+        );
+
+        move_to(admin, GameStatus {
+            current_game: create_game(admin, token, max_token_amount, max_xp),
+            previous_games: vector::empty(),
+            game_owner: admin_addr,
+            pending_game_owner: @0x0
+        });
+    }
+
+    public entry fun set_owner(game_owner: &signer, new_owner: address) acquires GameStatus {
+        assert!(exists<GameStatus>(@admin), ERR_GAME_STATUS_NOT_INITITALIZED);
+        let game_status = borrow_global_mut<GameStatus>(@admin);
+        // Check if the function caller is game owner
+        let game_owner_addr = signer::address_of(game_owner);
+        assert!(game_owner_addr == game_status.game_owner, ERR_NOT_GAME_OWNER);
+        game_status.pending_game_owner = new_owner;
+    }
+
+    public entry fun accept_owner(new_owner: &signer) acquires GameStatus {
+        assert!(exists<GameStatus>(@admin), ERR_GAME_STATUS_NOT_INITITALIZED);
+        let game_status = borrow_global_mut<GameStatus>(@admin);
+        let new_owner_addr = signer::address_of(new_owner);
+        assert!(new_owner_addr == game_status.pending_game_owner, ERR_NOT_PENDING_GAME_OWNER);
+        game_status.game_owner = new_owner_addr;
+        game_status.pending_game_owner = @0x0;
+    }
+
+    public entry fun deposit(sender: &signer, game_obj: Object<Game>, amount: u64) acquires Game {
+        let game = borrow_global<Game>(
+            object::object_address(&game_obj)
+        );
+        let metadata = fungible_asset::store_metadata(game.token_store);
+        let asset = primary_fungible_store::withdraw(sender, metadata, amount);
+        fungible_asset::deposit(game.token_store, asset);
+    }
+
+    public entry fun change_game_config(game_owner: &signer, game_obj: Object<Game>, max_token_amount: Option<u64>, max_xp: Option<u64>) acquires Game, GameStatus {
+        assert!(exists<GameStatus>(@admin), ERR_GAME_STATUS_NOT_INITITALIZED);
+        let game_status = borrow_global_mut<GameStatus>(@admin);
+        // Check if the function caller is game owner
+        let game_owner_addr = signer::address_of(game_owner);
+        assert!(game_owner_addr == game_status.game_owner, ERR_NOT_GAME_OWNER);
+        let game = borrow_global_mut<Game>(
+            object::object_address(&game_obj)
+        );
+        if(max_token_amount.is_none() && max_xp.is_none()) {
+            abort 0
+        };
+        if(max_token_amount.is_some()) {
+            game.max_token_amount = max_token_amount.extract();
+        };
+        if(max_xp.is_some()) {
+            game.max_xp = max_xp.extract();
+        };
+    }
+
+    public fun create_game(game_owner: &signer, token: Object<Metadata>, max_token_amount: u64, max_xp: u64): Object<Game>  acquires GameStatus {
+        assert!(exists<GameStatus>(@admin), ERR_GAME_STATUS_NOT_INITITALIZED);
+        let game_status = borrow_global_mut<GameStatus>(@admin);
+        // Check if the function caller is game owner
+        let game_owner_addr = signer::address_of(game_owner);
+        assert!(game_owner_addr == game_status.game_owner, ERR_NOT_GAME_OWNER);
+        // Create a new game
+        let game_constructor_ref = &object::create_object(
+            signer::address_of(game_owner)
+        );
+        let game_signer = &object::generate_signer(game_constructor_ref);
+        move_to(game_signer, Game {
+            token_store: helper::create_token_store(game_signer, token),
+            max_token_amount,
+            max_xp,
+            extend_ref: object::generate_extend_ref(game_constructor_ref)
+        });
+        event::emit(GameInitEvent {
+            game: object::address_from_constructor_ref(game_constructor_ref)
+        });
+        object::object_from_constructor_ref(game_constructor_ref)
+    }
+
+    public entry fun create_game_entry(game_owner: &signer, token: Object<Metadata>, max_token_amount: u64, max_xp: u64) acquires GameStatus{
+        create_game(game_owner, token, max_token_amount, max_xp);
+    }
+
+    public entry fun set_current_game(game_owner: &signer, game: Object<Game>) acquires GameStatus {
+        assert!(exists<GameStatus>(@admin), ERR_GAME_STATUS_NOT_INITITALIZED);
+        let game_status = borrow_global_mut<GameStatus>(@admin);
+        // Check if the function caller is game owner
+        let game_owner_addr = signer::address_of(game_owner);
+        assert!(game_owner_addr == game_status.game_owner, ERR_NOT_GAME_OWNER);
+        game_status.current_game = game;
+    }
+
+    #[randomness]
+    entry fun start_spin(game_owner: &signer, game_obj: Object<Game>, claimer: address) acquires GameStatus, Game {
+        assert!(exists<GameStatus>(@admin), ERR_GAME_STATUS_NOT_INITITALIZED);
+        let game_status = borrow_global<GameStatus>(@admin);
+        // Check if the function caller is game owner
+        let game_owner_addr = signer::address_of(game_owner);
+        assert!(game_owner_addr == game_status.game_owner, ERR_NOT_GAME_OWNER);
+        // get the spin range, 0 - xp, 1 = thank you and 2 = random tokens between 1 and 100
+        let game = borrow_global_mut<Game>(
+            object::object_address(&game_obj)
+        );
+        let game_store_balance = fungible_asset::balance(game.token_store);
+        let max_range = if(game_store_balance == 0) { 2 } else { 3 };
+        let type = randomness::u8_range(0, max_range);
+        let amount = 0;
+        if(type == 2) {
+            let amount = randomness::u64_range(1, math64::min(game_store_balance, game.max_token_amount) + 1);
+            let game_signer = &object::generate_signer_for_extending(&game.extend_ref);
+            let fa = fungible_asset::withdraw(
+                game_signer,
+                game.token_store,
+                amount
+            );
+           primary_fungible_store::deposit(claimer, fa);
+        } else if(type == 0) {
+            amount = randomness::u64_range(1, game.max_xp);
+        };
+
+        event::emit(SpinEvent {
+            claimer,
+            win_type: type,
+            amount
+        })
+    }
+
+    #[view]
+    public fun get_current_game(): address acquires GameStatus {
+        assert!(exists<GameStatus>(@admin), ERR_GAME_STATUS_NOT_INITITALIZED);
+        let game_status = borrow_global<GameStatus>(@admin);
+        object::object_address(&game_status.current_game)
+    }
+
+    #[view]
+    public fun get_previous_games(): vector<address> acquires GameStatus {
+        assert!(exists<GameStatus>(@admin), ERR_GAME_STATUS_NOT_INITITALIZED);
+        let game_status = borrow_global<GameStatus>(@admin);
+        let games = vector::empty<address>();
+        let i = 0;
+        while(i < game_status.previous_games.length()) {
+            games.push_back(
+                object::object_address(&game_status.previous_games[i]),
+            );
+            i += 1;
+        };
+        games
+    }
+
+    #[view]
+    public fun get_current_game_data(): (address, u64, u64, u64, u8, address) acquires GameStatus, Game {
+        let game_addr = get_current_game();
+        let game = borrow_global<Game>(
+            game_addr
+        );
+        let metadata= fungible_asset::store_metadata(game.token_store);
+        (
+            game_addr,
+            fungible_asset::balance(game.token_store),
+            game.max_token_amount,
+            game.max_xp,
+            fungible_asset::decimals(metadata),
+            object::object_address(&metadata)
+        )
+    }
+
+    #[view]
+    public fun get_owner_metadata(): (address, address) acquires GameStatus {
+        assert!(exists<GameStatus>(@admin), ERR_GAME_STATUS_NOT_INITITALIZED);
+        let game_status = borrow_global<GameStatus>(@admin);
+        (game_status.game_owner, game_status.pending_game_owner)
+    }
+}

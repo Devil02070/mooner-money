@@ -1,0 +1,49 @@
+pipeline {
+    agent any
+    environment {
+        STARTING_VERSION = credentials('MEOW_FUN_STARTING_VERSION')
+        DATABASE_URL = credentials('MEOW_FUN_DATABASE_URL')
+    }
+    stages {
+        stage('checkout') {
+            steps {
+                git branch: 'master', credentialsId: '881fc6da-3043-4f67-8fb4-ad2485648eab', url: 'https://github.com/ajaythxkur/meow-fun'
+            }
+        }
+
+        stage('image build'){
+            steps {
+                  sh 'docker image build -t ajaythxkur/meow-fun-indexer:v$BUILD_ID ./indexer'
+                  sh 'docker image tag ajaythxkur/meow-fun-indexer:v$BUILD_ID ajaythxkur/meow-fun-indexer:latest'
+              }
+        }
+        stage('image push'){
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub', passwordVariable: 'pass', usernameVariable: 'user')]) {
+                    sh "docker login -u ${user} -p ${pass}"
+                    sh 'docker image push ajaythxkur/meow-fun-indexer:v$BUILD_ID'
+                    sh 'docker image push ajaythxkur/meow-fun-indexer:latest'
+                    sh 'docker image rmi ajaythxkur/meow-fun-indexer:v$BUILD_ID ajaythxkur/meow-fun-indexer:latest'
+                }
+            }
+        }
+         stage("stop and remove container"){
+            steps {
+                sh '''
+                if [ "$(docker ps -q -f name=meow-fun-indexer)" ]; then
+                    echo "Stopping container..."
+                    docker stop meow-fun-indexer
+                    docker rm meow-fun-indexer
+                fi
+                '''
+            }
+        }
+        stage("creating container"){
+            steps {
+                sh '''
+                docker run -itd --name meow-fun-indexer -p 8788:8788 ajaythxkur/meow-fun-indexer:latest -e STARTING_VERSION=$STARTING_VERSION -e DATABASE_URL=$DATABASE_URL
+                '''
+            }
+        }
+    }
+}

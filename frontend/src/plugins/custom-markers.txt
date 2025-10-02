@@ -1,0 +1,179 @@
+"use client";
+
+import React, { useEffect, useRef } from "react";
+import {
+    createChart,
+    IChartApi,
+    ISeriesApi,
+    CandlestickSeries,
+    Time,
+} from "lightweight-charts";
+import { ChartData } from "@/types/custom";
+import { useWallet } from "@aptos-labs/wallet-adapter-react";
+
+interface CustomMarker {
+    time: Time;
+    price: number;
+    color: string;
+    text: string;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function addCustomMarkers(chart: IChartApi, series: ISeriesApi<any>, container: HTMLElement) {
+     const overlay = document.createElement("div");
+    Object.assign(overlay.style, {
+        position: "absolute",
+        top: "0",
+        left: "0",
+        width: "100%",
+        height: "100%",
+        pointerEvents: "none",
+        zIndex: "999",
+    });
+    container.appendChild(overlay);
+
+    let markers: CustomMarker[] = [];
+    const renderMarkers = () => {
+        overlay.innerHTML = "";
+        const offsets: Record<string, { buy: number; sell: number }> = {};
+
+        markers.forEach((m) => {
+            const x = chart.timeScale().timeToCoordinate(m.time);
+            const y = series.priceToCoordinate(m.price);
+            if (x == null || y == null) return;
+            
+            const timeKey = String(m.time);
+            if (!offsets[timeKey]) offsets[timeKey] = { buy: 0, sell: 0 };
+
+            let adjustedY: number;
+            if (m.color === "#F7AE94") {
+                adjustedY = (y as number) - 30 - offsets[timeKey].sell * 36;
+                offsets[timeKey].sell++;
+            } else {
+                adjustedY = (y as number) + 6 + offsets[timeKey].buy * 36;
+                offsets[timeKey].buy++;
+            }
+
+            const el = document.createElement("div");
+            Object.assign(el.style, {
+                position: "absolute",
+                left: `${(x as number) - 14}px`,
+                top: `${adjustedY}px`,
+                width: "24px",
+                height: "24px",
+                borderRadius: "50%",
+                background: m.color,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#000",
+                fontWeight: "bold",
+                fontFamily: "Arial, sans-serif",
+                fontSize: "9px",
+                boxShadow: "0 2px 6px rgba(0,0,0,0.5)",
+            });
+            el.innerText = m.text;
+            overlay.appendChild(el);
+        });
+    };
+
+    const timeScale = chart.timeScale();
+
+    // Type-safe event subscription
+    timeScale.subscribeVisibleTimeRangeChange(renderMarkers);
+    timeScale.subscribeSizeChange(renderMarkers);
+    chart.subscribeCrosshairMove(renderMarkers);
+
+    return {
+        updateMarkers(newMarkers: CustomMarker[]) {
+            markers = newMarkers;
+            renderMarkers();
+        },
+        destroy() {
+            if (container.contains(overlay)) container.removeChild(overlay);
+            timeScale.unsubscribeVisibleTimeRangeChange(renderMarkers);
+            timeScale.unsubscribeSizeChange(renderMarkers);
+            chart.unsubscribeCrosshairMove(renderMarkers);
+        },
+    };
+}
+
+export function Chart({ data, isDev }: { data: ChartData[], isDev: boolean }) {
+    const chartRef = useRef<HTMLDivElement | null>(null);
+    const chartInstance = useRef<IChartApi | null>(null);
+    const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+    const pluginRef = useRef<ReturnType<typeof addCustomMarkers> | null>(null);
+
+
+    useEffect(() => {
+        if (!chartRef.current) return;
+
+        const chart = createChart(chartRef.current, {
+            layout: { textColor: "white", background: { color: "black" } },
+            grid: { vertLines: { color: "rgba(255,255,255,0.1)" }, horzLines: { color: "rgba(255,255,255,0.1)" } },
+            width: chartRef.current.clientWidth,
+            height: 400,
+        });
+
+        chart.timeScale().applyOptions({
+            barSpacing: 10,
+            borderColor: '#000',
+            rightOffset: 20,  // Small padding on the right
+            fixLeftEdge: false,  // Allow scrolling to center
+            fixRightEdge: false, // Allow scrolling to center
+        });
+
+        chartInstance.current = chart;
+        const series = chart.addSeries(CandlestickSeries, {
+            upColor: "#19890D",
+            downColor: "#F24138",
+            borderVisible: false,
+            wickUpColor: "#19890D",
+            wickDownColor: "#F24138",
+            priceFormat: { type: "price", precision: 8, minMove: 0.00000001 },
+        });
+
+        seriesRef.current = series;
+        pluginRef.current = addCustomMarkers(chart, series, chartRef.current);
+
+        return () => {
+            pluginRef.current?.destroy();
+            chart.remove();
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!seriesRef.current || !data.length || !chartInstance.current) return;
+
+        seriesRef.current.setData(data);
+       const markers: CustomMarker[] = data.flatMap((d) => {
+            const devMarkers = [
+                ...(d.dev?.buy
+                    ? [{ time: d.time, price: d.open * 0.999, color: "#19890D", text: "DB" }]
+                    : []),
+                ...(d.dev?.sell
+                    ? [{ time: d.time, price: d.close * 1.002, color: "#F24138", text: "DS" }]
+                    : []),
+            ];
+
+            const userMarkers = [
+                ...(d.user?.buy
+                    ? [{ time: d.time, price: d.open * 0.999, color: "#19890D", text: "B" }]
+                    : []),
+                ...(d.user?.sell
+                    ? [{ time: d.time, price: d.close * 1.002, color: "#F24138", text: "S" }]
+                    : []),
+            ];
+            if(isDev) { return [...userMarkers] } else {  return [...devMarkers, ...userMarkers]; }
+        });
+
+
+
+        pluginRef.current?.updateMarkers(markers);
+
+        // Just fit content to maintain your preferred zoom level
+        chartInstance.current?.timeScale().fitContent();
+    }, [data, isDev]);
+
+    return <div ref={chartRef} style={{ width: "100%", height: "400px", position: "relative", overflow: "hidden", zIndex: "10" }} />;
+}

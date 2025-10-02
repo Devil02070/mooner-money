@@ -1,0 +1,60 @@
+pipeline {
+    agent any
+    environment {
+        PORT = credentials('MEOW_FUN_PORT')
+        DATABASE_URL = credentials('MEOW_FUN_DATABASE_URL')
+        JWT_SECRET = credentials('MEOW_FUN_JWT_SECRET')
+    }
+    stages {
+        stage('checkout') {
+            steps {
+                git branch: 'master', credentialsId: '881fc6da-3043-4f67-8fb4-ad2485648eab', url: 'https://github.com/ajaythxkur/meow-fun'
+            }
+        }
+
+        stage('Image Build') {
+            steps {
+                dir('backend') {
+                    sh 'docker image build -t ajaythxkur/meow-fun:v$BUILD_ID .'
+                    sh 'docker image tag ajaythxkur/meow-fun:v$BUILD_ID ajaythxkur/meow-fun:latest'
+                }
+            }
+        }
+         stage('Image Push') {
+            steps {
+                dir('backend') {
+                    withCredentials([usernamePassword(credentialsId: 'dockerhub', passwordVariable: 'pass', usernameVariable: 'user')]) {
+                        sh "docker login -u ${user} -p ${pass}"
+                        sh 'docker image push ajaythxkur/meow-fun:v$BUILD_ID'
+                        sh 'docker image push ajaythxkur/meow-fun:latest'
+                        sh 'docker image rmi ajaythxkur/meow-fun:v$BUILD_ID ajaythxkur/meow-fun:latest'
+                    }
+                }
+            }
+        }
+        stage("Stop and Remove Container") {
+            steps {
+                sh '''
+                if [ "$(docker ps -q -f name=meow-fun)" ]; then
+                    echo "Stopping container..."
+                    docker stop meow-fun
+                    docker rm meow-fun
+                fi
+                '''
+            }
+        }
+         stage("Create Container") {
+            steps {
+                dir('backend') {
+                    sh '''
+                    echo "PORT=$PORT" > .env
+                    echo "DATABASE_URL=$DATABASE_URL" >> .env
+                    echo "JWT_SECRET=$JWT_SECRET" >> .env
+
+                    docker run -itd --name meow-fun -p $PORT:$PORT --env-file .env ajaythxkur/meow-fun:latest
+                    '''
+                }
+            }
+        }
+    }
+}

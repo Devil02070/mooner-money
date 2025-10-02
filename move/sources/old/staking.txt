@@ -1,0 +1,258 @@
+module meowtos::staking {
+    use std::signer;
+    use aptos_std::string_utils;
+    use aptos_framework::object::{Self, Object};
+    use aptos_framework::fungible_asset::{Self, FungibleStore, Metadata, FungibleAsset};
+    use aptos_framework::event;
+    use aptos_framework::timestamp;
+    use aptos_framework::primary_fungible_store;
+    use meowtos::helper::{get_pair_token, create_token_store};
+
+    #[resource_group_member(group=aptos_framework::object::ObjectGroup)]
+    struct StakePool has key {
+        stake_store: Object<FungibleStore>,
+        fee_store: Object<FungibleStore>,
+        min_lock_duration: u64,
+        fee_growth_global: u128,
+        extend_ref: object::ExtendRef
+    }
+
+    #[resource_group_member(group=aptos_framework::object::ObjectGroup)]
+    struct Position has key {
+        stake_obj: Object<StakePool>,
+        amount: u64,
+        unlock_ts: u64,
+        fee_growth_snapshot: u128,
+        delete_ref: object::DeleteRef
+    }
+
+    #[event]
+    struct PositionCreated has drop, store {
+        stake_addr: address,
+        position_addr: address,
+        user: address,
+        amount: u64,
+        unlock_ts: u64,
+    }
+
+    #[event]
+    struct RewardsDeposited has drop, store {
+        stake_addr: address,
+        amount: u64,
+        ts: u64
+    }
+
+    #[event]
+    struct RewardsClaimed has drop, store {
+        position_addr: address,
+        user: address,
+        amount: u64,
+        ts: u64
+    }
+
+    #[event]
+    struct PositionRemoved has drop, store {
+        position_addr: address,
+        ts: u64
+    }
+
+    /// Not the admin of the module
+    const ERR_NOT_ADMIN: u64 = 0;
+    /// Staking pool not found
+    const ERR_STAKE_POOL_NOT_FOUND: u64 = 1;
+    /// Not the owner of current position
+    const ERR_NOT_POSITION_OWNER: u64 = 2;
+    /// Tokens are still locked
+    const ERR_STILL_LOCKED: u64 = 3;
+    /// Token amount is zero
+    const ERR_ZERO_AMOUNT: u64 = 4;
+
+    const PRECISION: u128 = 10000000000;
+
+    public fun initialize(admin: &signer, metadata: Object<Metadata>, min_lock_duration: u64) {
+        assert!(signer::address_of(admin) == @admin, ERR_NOT_ADMIN);
+        // create the stake object
+        let pool_constructor__ref = &object::create_named_object(admin, *get_stake_seeds(object::object_address(&metadata)));
+        let pool_signer = &object::generate_signer(pool_constructor__ref);
+        // store initial data
+        let stake_pool = StakePool {
+            stake_store: create_token_store(pool_signer, metadata),
+            fee_store: create_token_store(pool_signer, get_pair_token()),
+            min_lock_duration,
+            fee_growth_global: 0,
+            extend_ref: object::generate_extend_ref(pool_constructor__ref)
+        };
+        // save stake object
+        move_to(pool_signer, stake_pool);
+    }
+
+    inline fun get_stake_seeds(addr: address): &vector<u8> {
+        let seed = string_utils::format1(
+            &b"meowmehn-{}",
+            addr, 
+        );
+        seed.bytes()
+    }
+
+    public entry fun stake(sender: &signer, stake_obj: Object<StakePool>, amount: u64) acquires StakePool {
+        assert!(amount > 0, ERR_ZERO_AMOUNT);
+        let stake_addr = object::object_address(&stake_obj);
+        let stake_pool = borrow_global_mut<StakePool>(stake_addr);
+        // get the staking asset metadata and withdraw
+        let metadata = fungible_asset::store_metadata(stake_pool.stake_store);
+        let asset = primary_fungible_store::withdraw(sender, metadata, amount);
+        // deposit the asset to stake pool
+        fungible_asset::deposit(stake_pool.stake_store, asset);
+        // create a position for sender
+        let current_ts = timestamp::now_seconds();
+        let unlock_ts = current_ts + stake_pool.min_lock_duration;
+        // create position object
+        let position_constructor_ref = &object::create_object(signer::address_of(sender));
+        let position_signer = &object::generate_signer(position_constructor_ref);
+        let transfer_ref = object::generate_transfer_ref(position_constructor_ref);
+        object::disable_ungated_transfer(&transfer_ref);
+        // create user position
+        let position = Position {
+            stake_obj,
+            amount,
+            unlock_ts,
+            fee_growth_snapshot: stake_pool.fee_growth_global,
+            delete_ref: object::generate_delete_ref(position_constructor_ref)
+        };
+        move_to(position_signer, position);
+        event::emit(PositionCreated {
+            stake_addr: object::object_address(&stake_obj),
+            position_addr: object::address_from_constructor_ref(position_constructor_ref),
+            user: signer::address_of(sender),
+            amount,
+            unlock_ts,
+        })
+    }
+
+    public entry fun claim_rewards(sender: &signer, position_obj: Object<Position>) acquires Position, StakePool {
+        let position_addr = object::object_address(&position_obj);
+        assert!(object::is_owner(position_obj, signer::address_of(sender)), ERR_NOT_POSITION_OWNER);
+        let position = borrow_global_mut<Position>(position_addr);
+        let stake_pool = borrow_global<StakePool>(
+            object::object_address(&position.stake_obj)
+        );
+        claim(position, stake_pool, signer::address_of(sender), position_addr);
+    }
+
+    public fun add_rewards(metadata: Object<Metadata>, fee_asset: FungibleAsset, fee_wallet: address) acquires StakePool {
+        let stake_addr = get_stake_addr(metadata);
+        assert!(exists<StakePool>(stake_addr), ERR_STAKE_POOL_NOT_FOUND);
+        let stake_pool = borrow_global_mut<StakePool>(stake_addr);
+        let liquidity = fungible_asset::balance(stake_pool.stake_store);
+        // If there is no liquidity, deposit the asset to fallback fee wallet
+        if(liquidity == 0) {
+            primary_fungible_store::deposit(fee_wallet, fee_asset);
+        } else {
+            let amount = fungible_asset::amount(&fee_asset);
+            stake_pool.fee_growth_global += (amount as u128) * PRECISION / (liquidity as u128);
+            fungible_asset::deposit(stake_pool.fee_store, fee_asset);
+            event::emit(RewardsDeposited {
+                stake_addr,
+                amount,
+                ts: timestamp::now_seconds()
+            });
+        }
+       
+    }
+
+    public entry fun unstake(sender: &signer, position_obj: Object<Position>) acquires Position, StakePool {
+        let position_addr = object::object_address(&position_obj);
+        assert!(object::is_owner(position_obj, signer::address_of(sender)), ERR_NOT_POSITION_OWNER);
+        let position = borrow_global_mut<Position>(position_addr);
+        let stake_pool = borrow_global<StakePool>(
+            object::object_address(&position.stake_obj)
+        );
+        claim(position, stake_pool, signer::address_of(sender), position_addr);
+        let Position {
+            amount,
+            delete_ref,
+            fee_growth_snapshot:_,
+            stake_obj:_,
+            unlock_ts
+        } = move_from<Position>(position_addr);
+        let current_ts = timestamp::now_seconds();
+        assert!(current_ts > unlock_ts, ERR_STILL_LOCKED);
+        let stake_signer = &object::generate_signer_for_extending(&stake_pool.extend_ref);
+        let asset = fungible_asset::withdraw(stake_signer, stake_pool.stake_store, amount);
+        primary_fungible_store::deposit(signer::address_of(sender), asset);
+        object::delete(delete_ref);
+        event::emit(PositionRemoved {
+            position_addr,
+            ts: current_ts
+        });
+    }
+
+    fun claim(position: &mut Position, stake_pool: &StakePool, user: address, position_addr: address) {
+        let delta_fee = stake_pool.fee_growth_global - position.fee_growth_snapshot;
+        let fee_rewards = (delta_fee * (position.amount as u128)) / PRECISION;
+        position.fee_growth_snapshot = stake_pool.fee_growth_global;
+        // withdraw from stake signer
+        let stake_signer = object::generate_signer_for_extending(&stake_pool.extend_ref);
+        let asset = fungible_asset::withdraw(&stake_signer, stake_pool.fee_store, (fee_rewards as u64));
+        primary_fungible_store::deposit(user, asset);
+        event::emit(RewardsClaimed {
+            user,
+            amount: (fee_rewards as u64),
+            position_addr,
+            ts: timestamp::now_seconds()
+        });
+    }
+
+    public entry fun claim_all(sender: &signer, positions: vector<Object<Position>>) acquires Position, StakePool {
+        positions.for_each(|position| {
+            claim_rewards(sender, position);
+        });
+    }
+
+    // ========================= View Functions ======================= //
+    #[view]
+    public fun get_stake_addr(metadata: Object<Metadata>): address {
+        let fa_addr = object::object_address(&metadata);
+        object::create_object_address(&@admin, *get_stake_seeds(fa_addr))
+    }
+
+    #[view]
+    public fun token_stake_exists(token: Object<Metadata>): bool {
+        exists<StakePool>(get_stake_addr(token))
+    }
+
+
+    #[view]
+    public fun get_stake_info(metadata: Object<Metadata>): (u64, u64, u64, u128, address) acquires StakePool {
+        let stake_addr = get_stake_addr(metadata);
+        assert!(exists<StakePool>(stake_addr), ERR_STAKE_POOL_NOT_FOUND);
+        let stake_pool = borrow_global<StakePool>(stake_addr);
+        (
+            fungible_asset::balance(stake_pool.stake_store),
+            fungible_asset::balance(stake_pool.fee_store),
+            stake_pool.min_lock_duration,
+            stake_pool.fee_growth_global,
+            stake_addr
+        )
+    }
+
+    #[view]
+    public fun get_claimable_rewards(positions: vector<Object<Position>>): u64 acquires StakePool, Position {
+        let amount = 0;
+        let i = 0;
+        while(i < positions.length()) {
+            let position_addr = object::object_address(&positions[i]);
+            let position = borrow_global<Position>(position_addr);
+            let stake_pool = borrow_global<StakePool>(
+                object::object_address(&position.stake_obj)
+            );
+            let delta_fee = stake_pool.fee_growth_global - position.fee_growth_snapshot;
+            let fee_rewards = (delta_fee * (position.amount as u128)) / PRECISION;
+            amount += (fee_rewards as u64);
+            i += 1;
+        };
+        amount 
+    }
+
+
+}

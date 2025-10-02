@@ -1,0 +1,23 @@
+[package]
+name = "meow-fun"
+version = "1.0.0"
+authors = []
+
+[addresses]
+mooner_money="_"
+admin="_"
+
+[dev-addresses]
+mooner_money="0xcafe"
+admin="0x123"
+thalaswap_v2 = "0x111"
+
+[dependencies.AptosFramework]
+git = "https://github.com/aptos-labs/aptos-framework.git"
+rev = "mainnet"
+subdir = "aptos-framework"
+
+[dependencies.ThalaSwapV2]
+local="../thalaswap_v2_interface"
+
+[dev-dependencies]

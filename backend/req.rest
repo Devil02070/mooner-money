@@ -1,0 +1,98 @@
+@host=http://localhost:8787
+
+@token=Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZGRyZXNzIjoiMHhlYTA0NGNjODA4YTU1YjY1MzllMGU1MzliNjQyMThkNjRkMDdkZDk5Yjg0YzdlNDU4ZDJmNWMzOWUyZDdmYzc4In0.j5vy8DMuv0Ev9sqpwMSg26A_rTxOA8jC3OwN3D43PK8
+
+@contentType=application/json
+
+@adminToken=ADMIN
+// Token apis
+###
+GET {{host}}/api/token/get?search=&offset=&limit=&sort_by=&sort_order=&
+Accept-Encoding: gzip
+###
+GET {{host}}/api/token/get/0xde624677eeade7b23b5671b64ee15f14e7ab64f2b856de90ed574b5bc5cff4e5
+
+// Trade apis
+###
+GET {{host}}/api/trade/get/0xd8d02a70ff3dfef613a28a0530c11b18591b9f0940d680317345886333a762b3?user_addr=
+
+###
+GET {{host}}/api/trade/recent
+
+###
+GET {{host}}/api/trade/0xd8d02a70ff3dfef613a28a0530c11b18591b9f0940d680317345886333a762b3/holders
+
+###
+GET {{host}}/api/trade/0xd8d02a70ff3dfef613a28a0530c11b18591b9f0940d680317345886333a762b3/chart?user=0xc21eef93e0188165bc9f303e7f8b7f24064db5e6981d1cd092ee4a4b84ac38af
+
+###
+GET {{host}}/api/trade/0xd8d02a70ff3dfef613a28a0530c11b18591b9f0940d680317345886333a762b3/pnl/0xc21eef93e0188165bc9f303e7f8b7f24064db5e6981d1cd092ee4a4b84ac38af
+
+###
+GET {{host}}/api/trade/0xc21eef93e0188165bc9f303e7f8b7f24064db5e6981d1cd092ee4a4b84ac38af/pnl
+// Chat apis
+###
+POST {{host}}/api/chat/create/0xde624677eeade7b23b5671b64ee15f14e7ab64f2b856de90ed574b5bc5cff4e5
+Content-Type: {{contentType}}
+Authorization: {{token}}
+
+{
+    "content":"Hey this is a chat nnnn"
+}
+
+###
+GET {{host}}/api/chat/0xf6d55d86b04cae9e03173f8d5dc62d78ba5e54bb9143692a4dbbef014ebaaaba/get?offset=0&limit=2
+
+// User routes
+// This api can be called by aptos siwa only
+###
+POST {{host}}/api/auth/connect 
+Content-Type: {{contentType}}
+
+{
+    "input": "0x",
+    "output": "0x"
+}
+
+###
+PUT {{host}}/api/auth/connect-twitter
+Authorization: {{token}}
+x-access: "token received from twitter auth here"
+
+###
+DELETE {{host}}/api/auth/disconnect-twitter
+Authorization: {{token}}
+
+###
+GET {{host}}/api/auth/0xea044cc808a55b6539e0e539b64218d64d07dd99b84c7e458d2f5c39e2d7fc78/get
+
+// stake routes
+###
+GET {{host}}/api/stake/0xc21eef93e0188165bc9f303e7f8b7f24064db5e6981d1cd092ee4a4b84ac38af/get
+
+// task routes
+###
+POST {{host}}/api/task/create
+Content-Type: {{contentType}}
+x-admin: {{adminToken}}
+
+{
+    "description": "Make volume of 1 APT",
+    "xp": 4,
+    "requirement": {
+        "action_type": "volume",
+        "amount": "100000000",
+        "token": "APT"
+    },
+    "repeatable": true
+}
+
+###
+GET {{host}}/api/task/get
+
+###
+PUT {{host}}/api/task/claim/3
+Authorization: {{token}}
+
+###
+GET {{host}}/api/auth/xp-leaderboard

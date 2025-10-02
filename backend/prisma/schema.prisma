@@ -1,0 +1,147 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model accounts {
+  address           String        @id @db.VarChar
+  xp                Int           @default(0)
+  xp_earned         Int           @default(0)
+  x_id              String?       @db.VarChar
+  x_username        String?       @db.VarChar
+  x_display_picture String?       @db.VarChar
+  x_name            String?       @db.VarChar
+  x_verified        Boolean       @default(false)
+  x_description     String?       @db.VarChar
+  task_claims       task_claims[]
+}
+
+model tokens {
+  pool_addr              String   @id @db.VarChar(66)
+  name                   String
+  symbol                 String
+  image                  String
+  description            String
+  website                String?
+  twitter                String?
+  telegram               String?
+  decimals               Int      @db.SmallInt
+  pre_addr               String   @unique @db.VarChar(66)
+  main_addr              String   @unique @db.VarChar(66)
+  virtual_aptos_reserves Decimal  @db.Decimal(39, 0)
+  virtual_token_reserves Decimal  @db.Decimal(39, 0)
+  remain_token_reserves  Decimal  @db.Decimal(39, 0)
+  created_by             String   @db.VarChar(66)
+  is_completed           Boolean  @default(false)
+  ts                     BigInt
+  txn_version            BigInt
+  chats                  chats[]
+  trades                 trades[]
+
+  @@index([pre_addr], map: "idx_tokens_pre_addr")
+}
+
+model trades {
+  txn_version            BigInt  @id @default(autoincrement())
+  is_buy                 Boolean
+  user_addr              String  @db.VarChar(66)
+  aptos_amount           BigInt
+  token_amount           BigInt
+  token_address          String  @db.VarChar(66)
+  virtual_aptos_reserves Decimal @db.Decimal(39, 0)
+  virtual_token_reserves Decimal @db.Decimal(39, 0)
+  ts                     BigInt
+  token                  tokens  @relation(fields: [token_address], references: [pre_addr], onDelete: Cascade, onUpdate: NoAction, map: "fk_trades_token")
+
+  @@index([token_address], map: "idx_trades_token_addr")
+}
+
+model chats {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.VarChar
+  content       String
+  address       String   @db.VarChar
+  token_address String   @db.VarChar
+  image         String?
+  timestamp     DateTime @default(now()) @db.Timestamp(6)
+  token         tokens   @relation(fields: [token_address], references: [pre_addr], onDelete: NoAction, onUpdate: NoAction, map: "fk_chats_token")
+}
+
+model diesel_schema_migrations {
+  version String   @id @db.VarChar(50)
+  run_on  DateTime @default(now()) @db.Timestamp(6)
+
+  @@map("__diesel_schema_migrations")
+}
+
+model ledger_infos {
+  chain_id BigInt @id
+}
+
+model module_upgrade_history {
+  module_addr        String @db.VarChar(300)
+  module_name        String @db.VarChar(300)
+  upgrade_number     BigInt
+  module_bytecode    Bytes
+  module_source_code String
+  module_abi         Json   @db.Json
+  tx_version         BigInt
+
+  @@id([module_addr, module_name, upgrade_number])
+}
+
+model package_upgrade_history {
+  package_addr     String @db.VarChar(300)
+  package_name     String @db.VarChar(300)
+  upgrade_number   BigInt
+  upgrade_policy   BigInt
+  package_manifest String
+  source_digest    String
+  tx_version       BigInt
+
+  @@id([package_addr, package_name, upgrade_number])
+}
+
+model processor_status {
+  processor                  String    @id @db.VarChar(50)
+  last_success_version       BigInt
+  last_updated               DateTime  @default(now()) @db.Timestamp(6)
+  last_transaction_timestamp DateTime? @db.Timestamp(6)
+}
+
+model stakings {
+  position_addr String  @id @db.VarChar(66)
+  stake_addr    String  @db.VarChar(66)
+  user          String  @db.VarChar(66)
+  amount        BigInt
+  unlock_ts     BigInt
+  txn_version   BigInt
+  is_removed    Boolean @default(false)
+  claimed       BigInt? @default(0)
+}
+
+model task_claims {
+  id             Int       @id @default(autoincrement())
+  task_id        Int
+  address        String    @db.VarChar(66)
+  xp_earned      Int
+  repeat_counter Int?      @default(0)
+  claimed_at     DateTime? @default(now()) @db.Timestamp(6)
+  accounts       accounts  @relation(fields: [address], references: [address], onDelete: Cascade, onUpdate: NoAction)
+  tasks          tasks     @relation(fields: [task_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model tasks {
+  id          Int           @id @default(autoincrement())
+  description String?
+  xp          Int
+  requirement Json?
+  repeatable  Boolean?      @default(false)
+  max_repeat  Int?
+  created_at  DateTime?     @default(now()) @db.Timestamp(6)
+  task_claims task_claims[]
+}
